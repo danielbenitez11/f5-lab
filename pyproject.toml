@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "f5-lab"
+version = "0.1.0"
+description = "Field notes and tooling for studying how an F5 anti-bot layer treats a browser: automation-free Chrome over CDP, fingerprint variation and a one-page diagnostic."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { file = "LICENSE" }
+authors = [{ name = "Daniel Benitez" }]
+keywords = ["f5", "anti-bot", "cdp", "chrome-devtools-protocol", "fingerprint", "scraping", "web-security"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Security",
+]
+dependencies = ["websocket-client>=1.0"]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+
+[project.scripts]
+f5-diagnose = "f5_study.diagnose:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

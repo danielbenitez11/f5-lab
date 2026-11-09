@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>f5-lab — how a WAF treats a browser</title>
+<meta name="description" content="Field notes and tooling from studying how an F5 anti-bot layer tells a real browser from automation: the fingerprint, not the IP.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#111722; --panel-2:#0d131d; --line:#1e2a3a;
+    --ink:#e6edf3; --muted:#8b98a9; --faint:#5a6676;
+    --accent:#2dd4bf; --accent-2:#38bdf8; --warn:#f0a14b; --danger:#f05d5d;
+    --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
+    --sans:'Inter',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;
+    background-image:radial-gradient(900px 500px at 80% -10%,rgba(45,212,191,.08),transparent),
+                     radial-gradient(700px 400px at 0% 0%,rgba(56,189,248,.06),transparent);}
+  .wrap{max-width:900px;margin:0 auto;padding:0 20px}
+  a{color:var(--accent-2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  code{font-family:var(--mono);font-size:.92em}
+
+  .top{border-bottom:1px solid var(--line);position:sticky;top:0;backdrop-filter:blur(8px);
+    background:rgba(10,14,20,.7);z-index:10}
+  .top .wrap{display:flex;align-items:center;gap:12px;height:56px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--mono);font-weight:700;letter-spacing:.3px}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+  .top nav{margin-left:auto;display:flex;gap:18px;font-size:.9rem}
+  .top nav a{color:var(--muted)}
+  .top nav a:hover{color:var(--ink);text-decoration:none}
+
+  .hero{padding:72px 0 40px;display:grid;grid-template-columns:1.1fr .9fr;gap:36px;align-items:center}
+  .tag{display:inline-block;font-family:var(--mono);font-size:.74rem;text-transform:uppercase;letter-spacing:.14em;
+    color:var(--accent);border:1px solid var(--line);border-radius:999px;padding:5px 12px;margin-bottom:18px}
+  .hero h1{font-size:2.5rem;line-height:1.1;margin:0 0 14px}
+  .hero p{color:var(--muted);font-size:1.08rem;margin:0 0 24px;max-width:46ch}
+  .btns{display:flex;gap:12px;flex-wrap:wrap}
+  .btn{display:inline-flex;align-items:center;gap:8px;font-weight:600;font-size:.95rem;padding:11px 18px;border-radius:10px;border:1px solid var(--line)}
+  .btn.primary{background:var(--accent);color:#04201c;border-color:transparent}
+  .btn.primary:hover{text-decoration:none;filter:brightness(1.08)}
+  .btn.ghost{color:var(--ink)}
+  .btn.ghost:hover{text-decoration:none;border-color:var(--accent)}
+
+  .scope{display:flex;gap:12px;align-items:flex-start;background:var(--panel);border:1px solid var(--line);
+    border-left:3px solid var(--warn);border-radius:10px;padding:14px 16px;margin:8px 0 56px;font-size:.92rem;color:var(--muted)}
+  .scope svg{flex:none;margin-top:2px}
+
+  section{padding:30px 0;border-top:1px solid var(--line)}
+  .kicker{font-family:var(--mono);font-size:.74rem;letter-spacing:.14em;text-transform:uppercase;color:var(--faint)}
+  h2{font-size:1.5rem;margin:6px 0 16px}
+  h3{font-size:1.05rem;margin:22px 0 8px}
+
+  .lessons{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .card h4{margin:0 0 6px;font-size:1rem}
+  .card p{margin:0;color:var(--muted);font-size:.9rem}
+  .n{font-family:var(--mono);color:var(--accent);font-size:.78rem}
+
+  pre{background:var(--panel-2);border:1px solid var(--line);border-radius:10px;padding:16px;overflow:auto;
+    font-family:var(--mono);font-size:.88rem;line-height:1.6}
+  pre .c{color:var(--faint)}
+  pre .s{color:var(--accent)}
+  pre .k{color:var(--accent-2)}
+
+  table{width:100%;border-collapse:collapse;margin:18px 0;font-size:.9rem}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--faint);font-family:var(--mono);font-size:.78rem;text-transform:uppercase;letter-spacing:.08em}
+  td code{color:var(--warn)}
+
+  figure{margin:20px 0;text-align:center}
+  figure svg{max-width:100%;height:auto}
+  figcaption{color:var(--faint);font-size:.82rem;margin-top:8px;font-family:var(--mono)}
+
+  blockquote{margin:18px 0;padding:12px 18px;border-left:3px solid var(--accent);background:var(--panel);
+    border-radius:0 8px 8px 0;color:var(--ink);font-size:1.02rem}
+
+  footer{border-top:1px solid var(--line);padding:30px 0 50px;color:var(--faint);font-size:.86rem}
+  footer .disc{color:var(--faint);font-size:.8rem;margin-top:10px;max-width:70ch}
+
+  @media (max-width:720px){
+    .hero{grid-template-columns:1fr;padding-top:48px}
+    .hero h1{font-size:2rem}
+    .lessons{grid-template-columns:1fr}
+    .top nav{display:none}
+  }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <span class="brand"><span class="dot"></span>f5-lab</span>
+    <nav>
+      <a href="#reject">The rejection</a>
+      <a href="#fingerprint">Fingerprint vs IP</a>
+      <a href="#tools">The tools</a>
+      <a href="https://github.com/danielbenitez11/f5-lab">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- HERO -->
+  <div class="hero">
+    <div>
+      <span class="tag">WAF research · defensive</span>
+      <h1>How a WAF treats a browser</h1>
+      <p>Field notes from studying how an <strong>F5</strong> anti-bot layer tells a real browser from
+         automation — and the automation-free CDP tooling that made it measurable.</p>
+      <div class="btns">
+        <a class="btn primary" href="https://github.com/danielbenitez11/f5-lab">View on GitHub →</a>
+        <a class="btn ghost" href="#reject">Read the study</a>
+      </div>
+    </div>
+    <div>
+      <!-- HERO: a "Request Rejected" served as HTTP 200 -->
+      <svg viewBox="0 0 360 300" role="img" aria-label="An HTTP 200 response whose body says Request Rejected">
+        <rect x="40" y="40" width="280" height="220" rx="12" fill="#111722" stroke="#1e2a3a"/>
+        <rect x="40" y="40" width="280" height="34" rx="12" fill="#0d131d"/>
+        <circle cx="60" cy="57" r="4" fill="#f05d5d"/><circle cx="74" cy="57" r="4" fill="#f0a14b"/><circle cx="88" cy="57" r="4" fill="#2dd4bf"/>
+        <text x="300" y="61" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="12" fill="#2dd4bf">200 OK</text>
+        <!-- big warning glyph -->
+        <circle cx="180" cy="150" r="40" fill="none" stroke="#f05d5d" stroke-width="3"/>
+        <line x1="180" y1="132" x2="180" y2="160" stroke="#f05d5d" stroke-width="4" stroke-linecap="round"/>
+        <circle cx="180" cy="172" r="2.6" fill="#f05d5d"/>
+        <text x="180" y="214" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="15" fill="#f05d5d">Request Rejected</text>
+        <text x="180" y="236" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#8b98a9">the status code lied; the body didn't</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="scope">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#f0a14b" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+    <div><strong>Scope.</strong> Everything here was measured from the position of an ordinary visitor,
+    gently and a few requests at a time. Sites, hosts, operators and IPs are intentionally left out.
+    Study anti-bot layers only on systems you own or are authorised to test, and respect each
+    service's terms of use.</div>
+  </div>
+
+  <!-- REJECTION -->
+  <section id="reject">
+    <span class="kicker">01 — Reading the block</span>
+    <h2>A rejection that looks like success</h2>
+    <p>Against an F5 layer, a rejection arrives as an <strong>HTTP 200</strong> with an HTML body
+       titled “Request Rejected” — or as a connection reset on the TLS/HTTP layer. The status line
+       tells you nothing; the body does. A scraper that trusts the status code marks a failed fetch as
+       a good one.</p>
+    <blockquote><strong>Judge a block by the response body, never the status code.</strong></blockquote>
+    <p>Plain HTTP clients stop working, even with a browser TLS impersonation profile:</p>
+    <table>
+      <tr><th>Client</th><th>Result</th></tr>
+      <tr><td>HTTP client with a browser TLS profile (chrome / safari / firefox / edge)</td><td><code>Request Rejected</code></td></tr>
+      <tr><td>HTTP client with no impersonation, plain headers</td><td>worked one day, connection reset the next</td></tr>
+      <tr><td>Real browser driven over CDP, no automation flags</td><td>page loads, JSON reachable</td></tr>
+    </table>
+    <p>Passing the browser's cookies to an HTTP client did not help either. The signal is not in the
+       cookies — it is in the client itself.</p>
+  </section>
+
+  <!-- FINGERPRINT -->
+  <section id="fingerprint">
+    <span class="kicker">02 — What actually gets banned</span>
+    <h2>The fingerprint, not the IP</h2>
+
+    <figure>
+      <!-- the ban follows the device across IPs -->
+      <svg viewBox="0 0 640 180" role="img" aria-label="A ban follows the device fingerprint across three different IP addresses">
+        <!-- device with fingerprint -->
+        <rect x="24" y="54" width="150" height="90" rx="10" fill="#111722" stroke="#f05d5d"/>
+        <g stroke="#f05d5d" stroke-width="2" fill="none" opacity=".9">
+          <path d="M70 108 a20 20 0 0 1 58 0"/>
+          <path d="M78 108 a12 12 0 0 1 42 0"/>
+          <path d="M86 108 a5 5 0 0 1 26 0"/>
+        </g>
+        <text x="99" y="134" text-anchor="middle" font-family="JetBrains Mono, monospace" font-size="10" fill="#8b98a9">same device</text>
+        <!-- three IPs, all banned -->
+        <g font-family="JetBrains Mono, monospace" font-size="11">
+          <line x1="174" y1="99" x2="250" y2="60"  stroke="#1e2a3a"/>
+          <line x1="174" y1="99" x2="250" y2="99"  stroke="#1e2a3a"/>
+          <line x1="174" y1="99" x2="250" y2="138" stroke="#1e2a3a"/>
+          <rect x="250" y="46"  width="150" height="28" rx="6" fill="#0d131d" stroke="#1e2a3a"/><text x="262" y="64" fill="#8b98a9">IP #1</text><text x="388" y="64" text-anchor="end" fill="#f05d5d">banned</text>
+          <rect x="250" y="85"  width="150" height="28" rx="6" fill="#0d131d" stroke="#1e2a3a"/><text x="262" y="103" fill="#8b98a9">IP #2</text><text x="388" y="103" text-anchor="end" fill="#f05d5d">banned</text>
+          <rect x="250" y="124" width="150" height="28" rx="6" fill="#0d131d" stroke="#1e2a3a"/><text x="262" y="142" fill="#8b98a9">IP #3</text><text x="388" y="142" text-anchor="end" fill="#f05d5d">banned</text>
+        </g>
+        <!-- change fingerprint -> lifted -->
+        <text x="440" y="86" font-family="Inter, sans-serif" font-size="12" fill="#8b98a9">change tz +</text>
+        <text x="440" y="104" font-family="Inter, sans-serif" font-size="12" fill="#8b98a9">lang + WebGL</text>
+        <text x="440" y="134" font-family="JetBrains Mono, monospace" font-size="13" fill="#2dd4bf">→ lifted ✓</text>
+      </svg>
+      <figcaption>Changing the exit IP did nothing; varying the device fingerprint lifted the ban.</figcaption>
+    </figure>
+
+    <p>Two findings drove everything else:</p>
+    <div class="lessons">
+      <div class="card">
+        <div class="n">finding 01</div>
+        <h4>It was the framework, not the binary</h4>
+        <p>What got flagged was the <em>automation framework's</em> Chrome, not Chrome itself. A real
+           browser driven over CDP, with no automation flags, was treated as a visitor.</p>
+      </div>
+      <div class="card">
+        <div class="n">finding 02</div>
+        <h4>The device is the identity</h4>
+        <p>The device fingerprint, not the IP, is what gets banned. Time zone, language and WebGL
+           lifted a ban that rotating IPs never did.</p>
+      </div>
+      <div class="card">
+        <div class="n">finding 03</div>
+        <h4>Everything is time-scoped</h4>
+        <p>A plain client worked one day and was reset the next. A result is a measurement at a
+           moment, not a permanent rule.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- TOOLS -->
+  <section id="tools">
+    <span class="kicker">03 — The tooling</span>
+    <h2>Measuring it without automation flags</h2>
+    <p>The study ships small, vendor-neutral tools: a Chrome launched like a user would —
+       no chromedriver, no automation flags — and driven only through the DevTools Protocol, plus a
+       one-page diagnostic and a pure block classifier.</p>
+<pre><span class="c"># one-page diagnostic: launch, wait for the challenge, print</span>
+<span class="c"># the fingerprint the page sees and a verdict</span>
+f5-diagnose https://example.com/ <span class="k">--ready-marker</span> <span class="s">"&lt;app-root"</span> <span class="k">--api-path</span> /api/health
+f5-diagnose https://example.com/ <span class="k">--fingerprint</span> random <span class="k">--proxy</span> 127.0.0.1:8899</pre>
+    <table>
+      <tr><th>Module</th><th>What it is</th></tr>
+      <tr><td><code>chrome_cdp</code></td><td>Chrome over CDP; title read from <code>/json</code> without touching the page; private Xvfb when there is no display; clean shutdown</td></tr>
+      <tr><td><code>waf_block</code></td><td>vendor-neutral block detection by body, challenge fast-fail states, <code>BLK-WAF</code> / <code>BLK-RATELIMIT</code> classification</td></tr>
+      <tr><td><code>diagnose</code></td><td>the <code>f5-diagnose</code> CLI: fingerprint seen, cookie <em>names</em>, and a verdict</td></tr>
+      <tr><td><code>capture</code></td><td>diagnostics that never raise: screenshot + HTML, Performance-API resource statuses</td></tr>
+    </table>
+    <blockquote>This toolkit detects, classifies and fails fast; it does not defeat a WAF.</blockquote>
+    <p>Full field notes are in
+       <a href="https://github.com/danielbenitez11/f5-lab/blob/main/docs/findings.md">docs/findings.md</a>.</p>
+  </section>
+
+  <footer>
+    <div>MIT licensed · <a href="https://github.com/danielbenitez11/f5-lab">github.com/danielbenitez11/f5-lab</a></div>
+    <p class="disc">This is an independent study. It is not affiliated with, sponsored by, or endorsed
+       by F5 or any vendor named here. All product names are trademarks of their respective owners and
+       are used only to identify the technology under study.</p>
+  </footer>
+
+</div>
+</body>
+</html>
